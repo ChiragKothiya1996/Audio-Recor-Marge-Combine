@@ -1,0 +1,539 @@
+//
+//  RecordAudioVC.swift
+//
+//  Created by Chirag Kothiya on 15/09/21.
+//
+
+import UIKit
+import AVFoundation
+import MediaPlayer
+
+class RecordAudioVC: UIViewController {
+    
+    @IBOutlet weak var btnRecord: UIButton!
+    @IBOutlet weak var btnPlay: UIButton!
+    @IBOutlet weak var btnSelect: UIButton!
+    
+    var documentPicker:DocumentPicker?
+    
+    var audioRecorder: AVAudioRecorder!
+    var audioPlayer : AVAudioPlayer!
+    var meterTimer:Timer!
+    var isAudioRecordingGranted: Bool!
+    var isRecording = false
+    var isPlaying = false
+    
+    var audioUrl1: URL? = nil
+    var audioUrl2: URL? = nil
+    
+    var isBackGround = false
+    
+    var arrAudioUrls: [URL] = []
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        
+        self.documentPicker = DocumentPicker(presentationController: self, delegate: self)
+        
+        check_record_permission()
+//        mergeAudioFiles()
+    }
+    
+    func check_record_permission() {
+        switch AVAudioSession.sharedInstance().recordPermission {
+        case AVAudioSession.RecordPermission.granted:
+            isAudioRecordingGranted = true
+            break
+        case AVAudioSession.RecordPermission.denied:
+            isAudioRecordingGranted = false
+            break
+        case AVAudioSession.RecordPermission.undetermined:
+            AVAudioSession.sharedInstance().requestRecordPermission({ (allowed) in
+                if allowed {
+                    self.isAudioRecordingGranted = true
+                } else {
+                    self.isAudioRecordingGranted = false
+                }
+            })
+            break
+        default:
+            break
+        }
+    }
+    
+    func getDocumentsDirectory() -> URL {
+        let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+        let documentsDirectory = paths[0]
+        return documentsDirectory
+    }
+    
+    func getFileUrl() -> URL {
+        let filename = "myRecording.m4a"
+        let filePath = getDocumentsDirectory().appendingPathComponent(filename)
+        return filePath
+    }
+    
+    func setup_recorder() {
+        if isAudioRecordingGranted {
+            let session = AVAudioSession.sharedInstance()
+            do {
+                try session.setCategory(AVAudioSession.Category.playAndRecord, options: .defaultToSpeaker)
+                try session.setActive(true)
+                let settings = [
+                    AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                    AVSampleRateKey: 44100,
+                    AVNumberOfChannelsKey: 2,
+                    AVEncoderAudioQualityKey:AVAudioQuality.high.rawValue
+                ]
+                audioRecorder = try AVAudioRecorder(url: getFileUrl(), settings: settings)
+                audioRecorder.delegate = self
+                audioRecorder.isMeteringEnabled = true
+                audioRecorder.prepareToRecord()
+            }
+            catch let error {
+                self.display_alert(msg_title: "Error", msg_desc: error.localizedDescription, action_title: "OK")
+            }
+        } else {
+            self.display_alert(msg_title: "Error", msg_desc: "Don't have access to use your microphone.", action_title: "OK")
+        }
+    }
+    
+    @IBAction func actionBtnRecord(_ sender: UIButton) {
+        if(isRecording) {
+            finishAudioRecording(success: true)
+            btnRecord.setTitle("Record", for: .normal)
+            btnPlay.isEnabled = true
+            isRecording = false
+        } else {
+            setup_recorder()
+            
+            audioRecorder.record()
+            meterTimer = Timer.scheduledTimer(timeInterval: 0.1, target:self, selector:#selector(self.updateAudioMeter(timer:)), userInfo:nil, repeats:true)
+            btnRecord.setTitle("Stop", for: .normal)
+            btnPlay.isEnabled = false
+            isRecording = true
+        }
+    }
+    
+    func prepare_play() {
+        do {
+            audioPlayer = try AVAudioPlayer(contentsOf: getFileUrl())
+            audioPlayer.delegate = self
+            audioPlayer.prepareToPlay()
+        } catch {
+            print("Error")
+        }
+    }
+    
+    @objc func updateAudioMeter(timer: Timer) {
+        if audioRecorder.isRecording {
+            let hr = Int((audioRecorder.currentTime / 60) / 60)
+            let min = Int(audioRecorder.currentTime / 60)
+            let sec = Int(audioRecorder.currentTime.truncatingRemainder(dividingBy: 60))
+            let totalTimeString = String(format: "%02d:%02d:%02d", hr, min, sec)
+//            recordingTimeLabel.text = totalTimeString
+            audioRecorder.updateMeters()
+        }
+    }
+    
+    func finishAudioRecording(success: Bool) {
+        if success {
+            audioRecorder.stop()
+            audioRecorder = nil
+            meterTimer.invalidate()
+            print("recorded successfully.")
+        } else {
+            display_alert(msg_title: "Error", msg_desc: "Recording failed.", action_title: "OK")
+        }
+    }
+    
+    @IBAction func actionBtnPlay(_ sender: UIButton) {
+        if(isPlaying) {
+            audioPlayer.stop()
+            btnRecord.isEnabled = true
+            btnPlay.setTitle("Play", for: .normal)
+            isPlaying = false
+        } else {
+            if FileManager.default.fileExists(atPath: getFileUrl().path) {
+                btnRecord.isEnabled = false
+                btnPlay.setTitle("pause", for: .normal)
+                prepare_play()
+                audioPlayer.play()
+                isPlaying = true
+            } else {
+                display_alert(msg_title: "Error", msg_desc: "Audio file is missing.", action_title: "OK")
+            }
+        }
+    }
+    
+    @IBAction func actionSelect(_ sender: UIButton) {
+        isBackGround = false
+        openMediaPicker()
+    }
+    
+    @IBAction func actionSelectBackGround(_ sender: UIButton) {
+        isBackGround = true
+        openMediaPicker()
+    }
+    
+    @IBAction func actionBtnMarge(_ sender: UIButton) {
+        if audioUrl1 != nil && audioUrl2 != nil {
+            playmerge(audio1: NSURL(string: audioUrl1!.absoluteString)!, audio2: NSURL(string: audioUrl2!.absoluteString)!)
+        }
+    }
+    
+    @IBAction func actionBtnCombine(_ sender: UIButton) {
+        if arrAudioUrls.count > 0 {
+//            let arr = [URL(string: audioUrl1!.absoluteString)!, URL(string: audioUrl2!.absoluteString)!]
+            combineAudioFiles(audioFileUrls: arrAudioUrls)
+        }
+    }
+    
+    func display_alert(msg_title : String , msg_desc : String ,action_title : String) {
+        let ac = UIAlertController(title: msg_title, message: msg_desc, preferredStyle: .alert)
+        ac.addAction(UIAlertAction(title: action_title, style: .default) {
+            (result : UIAlertAction) -> Void in
+            _ = self.navigationController?.popViewController(animated: true)
+        })
+        present(ac, animated: true)
+    }
+    
+    func combineAudioFiles(audioFileUrls: [URL]) {
+        let composition = AVMutableComposition()
+        
+        for i in 0 ..< audioFileUrls.count {
+            let compositionAudioTrack :AVMutableCompositionTrack = composition.addMutableTrack(withMediaType: AVMediaType.audio, preferredTrackID: CMPersistentTrackID())!
+            
+            let asset = AVURLAsset(url: audioFileUrls[i])
+            
+            let track = asset.tracks(withMediaType: AVMediaType.audio)[0]
+            
+            let timeRange = CMTimeRange(start: CMTimeMake(value: 0, timescale: 600), duration: track.timeRange.duration)
+//            let timeRange = CMTimeRangeMake(start: CMTime.zero, duration: track.timeRange.duration)
+            
+//            try! compositionAudioTrack.insertTimeRange(timeRange, of: track, at: composition.duration)
+            do {
+                try compositionAudioTrack.insertTimeRange(timeRange, of: track, at: composition.duration)
+            } catch {
+                print(error)
+            }
+        }
+        
+        let documentDirectoryURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first! as NSURL
+        let mergeAudioURL = documentDirectoryURL.appendingPathComponent("combineAudio.m4a")! as URL as NSURL
+        let convertToWavUrl = documentDirectoryURL.appendingPathComponent("combineConvertToWav.wav")! as URL
+        
+        let filemanager = FileManager.default
+        do {
+            try filemanager.removeItem(at: mergeAudioURL as URL)
+        } catch let error as NSError {
+            NSLog("Error: \(error)")
+        }
+        do {
+            try filemanager.removeItem(at: convertToWavUrl)
+        } catch let error as NSError {
+            NSLog("Error: \(error)")
+        }
+        
+        let assetExport = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A)
+        assetExport?.outputFileType = AVFileType.m4a
+        assetExport?.outputURL = mergeAudioURL as URL
+        assetExport?.exportAsynchronously(completionHandler: {
+            switch assetExport!.status {
+            case AVAssetExportSession.Status.failed:
+                print("failed \(assetExport?.error)")
+            case AVAssetExportSession.Status.cancelled:
+                print("cancelled \(assetExport?.error)")
+            case AVAssetExportSession.Status.unknown:
+                print("unknown\(assetExport?.error)")
+            case AVAssetExportSession.Status.waiting:
+                print("waiting\(assetExport?.error)")
+            case AVAssetExportSession.Status.exporting:
+                print("exporting\(assetExport?.error)")
+            default:
+                print("Audio Concatenation Complete")
+                self.audioUrl1 = convertToWavUrl
+                self.convertAudio(mergeAudioURL as URL, outputURL: convertToWavUrl)
+                
+            //                do {
+            //                    print("fileDestinationUrl:- ", mergeAudioURL)
+            //                    self.audioPlayer = try AVAudioPlayer(contentsOf: mergeAudioURL as URL)
+            //                    self.audioPlayer.numberOfLoops = 0
+            //                    self.audioPlayer.prepareToPlay()
+            //                    self.audioPlayer.delegate=self
+            //                    self.audioPlayer.play()
+            //                } catch let error as NSError {
+            //                    print(error)
+            //                }
+            }
+        })
+        
+    }
+    
+    func playmerge(audio1: NSURL, audio2:  NSURL) {
+        let composition = AVMutableComposition()
+        let compositionAudioTrack1:AVMutableCompositionTrack = composition.addMutableTrack(withMediaType: AVMediaType.audio, preferredTrackID: CMPersistentTrackID())!
+        let compositionAudioTrack2:AVMutableCompositionTrack = composition.addMutableTrack(withMediaType: AVMediaType.audio, preferredTrackID: CMPersistentTrackID())!
+
+        let avAsset1 = AVURLAsset(url: audio1 as URL, options: nil)
+        let avAsset2 = AVURLAsset(url: audio2 as URL, options: nil)
+
+        let tracks1 = avAsset1.tracks(withMediaType: AVMediaType.audio)
+        let tracks2 = avAsset2.tracks(withMediaType: AVMediaType.audio)
+
+        let assetTrack1:AVAssetTrack = tracks1[0]
+        let assetTrack2:AVAssetTrack = tracks2[0]
+
+        let duration1: CMTime = assetTrack1.timeRange.duration
+        let duration2: CMTime = assetTrack2.timeRange.duration
+
+        let timeRange1 = CMTimeRangeMake(start: CMTime.zero, duration: duration1)
+        let timeRange2 = CMTimeRangeMake(start: CMTime.zero, duration: duration2)
+        do {
+            try compositionAudioTrack1.insertTimeRange(timeRange1, of: assetTrack1, at: CMTime.zero)
+            try compositionAudioTrack2.insertTimeRange(timeRange2, of: assetTrack2, at: CMTime.zero)
+        } catch {
+            print(error)
+        }
+        
+        
+
+        let documentDirectoryURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first! as NSURL
+        let fileDestinationUrl = documentDirectoryURL.appendingPathComponent("margeAudio.m4a")! as URL
+        let convertToWavUrl = documentDirectoryURL.appendingPathComponent("margeConvertToWav.wav")! as URL
+
+        let filemanager = FileManager.default
+        do {
+            try filemanager.removeItem(at: fileDestinationUrl)
+        } catch let error as NSError {
+            NSLog("Error: \(error)")
+        }
+        do {
+            try filemanager.removeItem(at: convertToWavUrl)
+        } catch let error as NSError {
+            NSLog("Error: \(error)")
+        }
+        
+//        let assetExport = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A)
+//        assetExport?.outputFileType = AVFileType.m4a
+        
+        let assetExport = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A)
+        assetExport?.outputFileType = AVFileType.m4a
+        assetExport?.outputURL = fileDestinationUrl
+        assetExport?.exportAsynchronously(completionHandler: {
+            switch assetExport!.status
+            {
+            case AVAssetExportSession.Status.failed:
+                print("failed \(assetExport?.error)")
+            case AVAssetExportSession.Status.cancelled:
+                print("cancelled \(assetExport?.error)")
+            case AVAssetExportSession.Status.unknown:
+                print("unknown\(assetExport?.error)")
+            case AVAssetExportSession.Status.waiting:
+                print("waiting\(assetExport?.error)")
+            case AVAssetExportSession.Status.exporting:
+                print("exporting\(assetExport?.error)")
+            default:
+                print("complete")
+            }
+            
+            
+            self.convertAudio(fileDestinationUrl, outputURL: convertToWavUrl)
+            
+//            do {
+//                self.audioPlayer = try AVAudioPlayer(contentsOf: fileDestinationUrl)
+//                self.audioPlayer.numberOfLoops = 0
+//                self.audioPlayer.prepareToPlay()
+//                self.audioPlayer.delegate=self
+//                self.audioPlayer.play()
+//                print("fileDestinationUrl:- ", fileDestinationUrl)
+//            } catch let error as NSError {
+//                print(error)
+//            }
+        })
+    }
+    
+    func convertAudio(_ url: URL, outputURL: URL) {
+        print("inputURL:- ", url)
+        print("outputURL:- ", outputURL)
+        
+        var error : OSStatus = noErr
+        var destinationFile: ExtAudioFileRef? = nil
+        var sourceFile : ExtAudioFileRef? = nil
+
+        var srcFormat : AudioStreamBasicDescription = AudioStreamBasicDescription()
+        var dstFormat : AudioStreamBasicDescription = AudioStreamBasicDescription()
+
+        ExtAudioFileOpenURL(url as CFURL, &sourceFile)
+
+        var thePropertySize: UInt32 = UInt32(MemoryLayout.stride(ofValue: srcFormat))
+
+        ExtAudioFileGetProperty(sourceFile!,
+                                kExtAudioFileProperty_FileDataFormat,
+                                &thePropertySize, &srcFormat)
+
+        dstFormat.mSampleRate = 8000
+        dstFormat.mFormatID = kAudioFormatLinearPCM
+        dstFormat.mChannelsPerFrame = 1
+        dstFormat.mBitsPerChannel = 16
+        dstFormat.mBytesPerPacket = 2 * dstFormat.mChannelsPerFrame
+        dstFormat.mBytesPerFrame = 2 * dstFormat.mChannelsPerFrame
+        dstFormat.mFramesPerPacket = 1
+        dstFormat.mFormatFlags = kLinearPCMFormatFlagIsPacked |
+        kAudioFormatFlagIsSignedInteger
+
+        // Create destination file
+        error = ExtAudioFileCreateWithURL(
+            outputURL as CFURL,
+            kAudioFileWAVEType,
+            &dstFormat,
+            nil,
+            AudioFileFlags.eraseFile.rawValue,
+            &destinationFile)
+        print("Error 1 in convertAudio: \(error.description)")
+
+        error = ExtAudioFileSetProperty(sourceFile!,
+                                        kExtAudioFileProperty_ClientDataFormat,
+                                        thePropertySize,
+                                        &dstFormat)
+        print("Error 2 in convertAudio: \(error.description)")
+
+        error = ExtAudioFileSetProperty(destinationFile!,
+                                        kExtAudioFileProperty_ClientDataFormat,
+                                        thePropertySize,
+                                        &dstFormat)
+        print("Error 3 in convertAudio: \(error.description)")
+
+        let bufferByteSize : UInt32 = 32768
+        var srcBuffer = [UInt8](repeating: 0, count: 32768)
+        var sourceFrameOffset : ULONG = 0
+
+        while(true){
+            var fillBufList = AudioBufferList(
+                mNumberBuffers: 1,
+                mBuffers: AudioBuffer(
+                    mNumberChannels: 2,
+                    mDataByteSize: UInt32(srcBuffer.count),
+                    mData: &srcBuffer
+                )
+            )
+            var numFrames : UInt32 = 0
+
+            if(dstFormat.mBytesPerFrame > 0){
+                numFrames = bufferByteSize / dstFormat.mBytesPerFrame
+            }
+
+            error = ExtAudioFileRead(sourceFile!, &numFrames, &fillBufList)
+            print("Error 4 in convertAudio: \(error.description)")
+
+            if(numFrames == 0){
+                error = noErr;
+                break;
+            }
+
+            sourceFrameOffset += numFrames
+            error = ExtAudioFileWrite(destinationFile!, numFrames, &fillBufList)
+            print("Error 5 in convertAudio: \(error.description)")
+        }
+
+        error = ExtAudioFileDispose(destinationFile!)
+        print("Error 6 in convertAudio: \(error.description)")
+        error = ExtAudioFileDispose(sourceFile!)
+        print("Error 7 in convertAudio: \(error.description)")
+        
+        print("fileDestinationUrl:- ", outputURL)
+//        do {
+//            self.audioPlayer = try AVAudioPlayer(contentsOf: outputURL)
+//            self.audioPlayer.numberOfLoops = 0
+//            self.audioPlayer.prepareToPlay()
+//            self.audioPlayer.delegate=self
+//            self.audioPlayer.play()
+//            print("fileDestinationUrl:- ", outputURL)
+//        } catch let error as NSError {
+//            print(error)
+//        }
+    }
+    
+    func openMediaPicker() {
+//        let mediaPicker = MPMediaPickerController(mediaTypes: .music)
+//        mediaPicker.delegate = self
+//        mediaPicker.allowsPickingMultipleItems = true
+//        self.present(mediaPicker, animated: true, completion: nil)
+        
+        self.documentPicker?.displayPicker()
+        
+    }
+    
+}
+
+extension RecordAudioVC : DocumentDelegate {
+    func didPickDocument(document: Document?) {
+        if let pickedDoc = document {
+            let fileURL = pickedDoc.fileURL
+            print("fileURL2:: \(fileURL)")
+            
+            if isBackGround {
+                audioUrl2 = fileURL
+            } else {
+                arrAudioUrls.append(fileURL)
+            }
+            
+//            if audioUrl1 == nil {
+//                audioUrl1 = fileURL
+//                btnSelect.setTitle("select file 2", for: .normal)
+//            } else {
+//                audioUrl2 = fileURL
+//                btnSelect.setTitle("pelase play audio", for: .normal)
+//            }
+            
+//            let filename = (fileURL.lastPathComponent as NSString)  // pdfURL is your file url
+//            let fileExtention = (filename as NSString).pathExtension  // get your file extension
+//            let pathPrefix = (filename as NSString).deletingPathExtension   // File name without extension
+//            print("fileext :: \(fileExtention)")
+//            print("pathPrefix :: \(pathPrefix)")
+//            urlAudioFile = pickedDoc.fileURL
+            
+        }
+    }
+}
+
+extension RecordAudioVC: MPMediaPickerControllerDelegate {
+    
+    func mediaPicker(_ mediaPicker: MPMediaPickerController, didPickMediaItems mediaItemCollection: MPMediaItemCollection) {
+//        MPMediaItem * item = (MPMediaItem *)[mediaItemCollection.items objectAtIndex:index];
+//          NSURL * pathURL = [item valueForProperty:MPMediaItemPropertyAssetURL];
+        let item = mediaItemCollection.items[0]
+        let pathURL = item.value(forProperty: MPMediaItemPropertyAssetURL) as! NSURL
+        
+        let item2 = mediaItemCollection.items[1]
+        let pathURL2 = item2.value(forProperty: MPMediaItemPropertyAssetURL) as! NSURL
+        
+//        print("\(pathURL)")
+        print("\(pathURL) \n \(pathURL2)")
+        
+        playmerge(audio1: pathURL, audio2: pathURL2)
+        
+        self.dismiss(animated: true, completion: nil)
+    }
+    
+    func mediaPickerDidCancel(_ mediaPicker: MPMediaPickerController) {
+        self.dismiss(animated: true, completion: nil)
+    }
+    
+}
+
+extension RecordAudioVC: AVAudioRecorderDelegate, AVAudioPlayerDelegate {
+    func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool)
+    {
+        if !flag
+        {
+            finishAudioRecording(success: false)
+        }
+        btnPlay.isEnabled = true
+    }
+    
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool)
+    {
+        btnRecord.isEnabled = true
+    }
+}
